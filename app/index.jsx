@@ -380,7 +380,7 @@ if (!result.canceled) {
       });
   
       // Send emergency email to response team via Laravel backend
-      await axios.post('http://192.168.1.107:8000/api/report-emergency', {
+      await axios.post(`${BASE_URL}/report-emergency`, {
         emergencyType: selectedEmergency,
         description,
         location: {
@@ -522,7 +522,7 @@ if (!result.canceled) {
     try {
       await fetchUserData(personalInfo.email);
   
-      const response = await axios.post('http://192.168.1.107:8000/api/send-verification-code', {
+      const response = await axios.post(`${BASE_URL}/send-verification-code`, {
         email: personalInfo.email,
       });
   
@@ -538,10 +538,12 @@ if (!result.canceled) {
     }
   };
   
+  const BASE_URL = 'https://lagalertadmin.site/api';
+
 
   const handleCodeSubmit = async () => {
     try {
-      const response = await axios.post('http://192.168.1.107:8000/api/verify-code', {
+      const response = await axios.post(`${BASE_URL}/verify-code`, {
         email: personalInfo.email,
         verification_code: verificationCode,
       });
