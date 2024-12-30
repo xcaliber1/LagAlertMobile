@@ -144,26 +144,26 @@ if (!result.canceled) {
 }
 };
 
-  // Fetch user data based on email
-  const fetchUserData = async (email) => {
-    try {
-      const q = query(collection(firestore, 'personalInfo'), where('email', '==', email));
-      const querySnapshot = await getDocs(q);
-  
-      if (!querySnapshot.empty) {
-        const doc = querySnapshot.docs[0].data();
-        setUserData(doc); // Set the fetched data in the state
-        setEmailExists(true); // Email exists
-        Alert.alert('Success', 'User data found!');
-      } else {
-        Alert.alert('No user found with this email.');
-        setEmailExists(false);
-      }
-    } catch (error) {
-      console.error("Error fetching user data:", error);
-      Alert.alert('Error', 'Failed to fetch user data.');
+const fetchUserData = async (email) => {
+  try {
+    const q = query(collection(firestore, 'personalInfo'), where('email', '==', email));
+    const querySnapshot = await getDocs(q);
+
+    if (!querySnapshot.empty) {
+      const doc = querySnapshot.docs[0].data();
+      setUserData(doc); // Set the fetched data in the state
+      setEmailExists(true); // Email exists
+      Alert.alert('Success', 'User data found!');
+    } else {
+      Alert.alert('No user found with this email.');
+      setEmailExists(false);
     }
-  };
+  } catch (error) {
+    console.error("Error fetching user data:", error);
+    Alert.alert('Error', 'Failed to fetch user data.');
+  }
+};
+
 
   useEffect(() => {
     if (systemColorScheme === 'dark' && !darkMode) {
@@ -207,11 +207,9 @@ if (!result.canceled) {
 
   const handleEmergencyPress = async () => {
     try {
-      // Fetch reports from the "Reported" collection
       const querySnapshot = await getDocs(collection(firestore, "Reported"));
       const reports = querySnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
   
-      // Find the report matching the email
       const findEmail = reports.find((report) => report.email === personalInfo.email);
   
       if (findEmail) {
@@ -225,6 +223,7 @@ if (!result.canceled) {
       Alert.alert("Error", "Failed to fetch reports.");
     }
   };
+  
   
 
   const handleEmergencyLongPress = () => {
@@ -474,8 +473,9 @@ if (!result.canceled) {
       intervalId = setInterval(fetchReports, 3000);
     }
   
-    return () => clearInterval(intervalId); // Cleanup interval on unmount
+    return () => clearInterval(intervalId); // Cleanup interval on unmount or logout
   }, [firestore, personalInfo.email, buttonText]);
+  
   
   
   
@@ -534,7 +534,7 @@ if (!result.canceled) {
       }
     } catch (error) {
       console.error(error);
-      Alert.alert('Error', 'Failed to send verification code.');
+      Alert.alert('Error', 'Failed to send verification code. Please try again later.');
     }
   };
   
@@ -629,21 +629,26 @@ if (!result.canceled) {
   }
 
   const handleLogout = () => {
-    // Clear user data
+    // Clear user data and reset all relevant states
     setUserData({ firstname: '', lastname: '', phoneNumber: '', profileImageUri: '' });
     setPersonalInfo({ firstname: '', lastname: '', email: '', phoneNumber: '' });
     setVerificationCode('');
     setIsFormValid(true);
     setIsPhoneNumberValid(true);
     setIsEmailValid(true);
+    setDataNotification(null); // Clear notification
+    setVerificationStep(0); // Reset verification step
+    setButtonText('Emergency'); // Reset button text
+    setSelectedEmergency('');
+    setDescription('');
+    setMediaUri('');
+    setIsVideo(false);
+    setEmergencySent(false);
   
-
-    // Reset to the email verification screen
-    setVerificationStep(0);
-  
-    // Close the settings modal
+    // Close settings modal if open
     closeSettings();
   };
+  
 
   const animatedCancelStyle = {
     borderWidth: 5,
@@ -709,37 +714,31 @@ if (!result.canceled) {
     );
   }
 
-  // Verification Code Step
-  if (verificationStep === 1) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.verificationContainer}>
-          <Ionicons name="chatbubble-outline" size={80} color="red" style={styles.verificationIcon} />
-          <Text style={styles.verificationTitle}>Verification Code</Text>
-          <Text style={styles.verificationText}>Please type the verification code sent to your email</Text>
-          <View style={styles.codeInputContainer}>
-            {[...Array(6)].map((_, index) => (
-              <TextInput
-                key={index}
-                style={styles.codeInput}
-                keyboardType="number-pad"
-                maxLength={1}
-                value={verificationCode[index] || ''}
-                onChangeText={(text) => {
-                  const newCode = verificationCode.split('');
-                  newCode[index] = text;
-                  setVerificationCode(newCode.join(''));
-                }}
-              />
-            ))}
-          </View>
-          <TouchableOpacity style={styles.submitButton} onPress={handleCodeSubmit}>
-            <Text style={styles.submitButtonText}>Submit</Text>
-          </TouchableOpacity>
+// Verification Code Step
+if (verificationStep === 1) {
+  return (
+    <View style={styles.container}>
+      <View style={styles.verificationContainer}>
+        <Ionicons name="chatbubble-outline" size={80} color="red" style={styles.verificationIcon} />
+        <Text style={styles.verificationTitle}>Verification Code</Text>
+        <Text style={styles.verificationText}>Please type the verification code sent to your email</Text>
+        <View style={styles.codeInputWrapper}>
+          <TextInput
+            style={styles.continuousCodeInput}
+            keyboardType="number-pad"
+            maxLength={6} // Ensure the input length matches the verification code length
+            value={verificationCode}
+            onChangeText={(text) => setVerificationCode(text)} // Update state with the typed code
+          />
         </View>
+        <TouchableOpacity style={styles.submitButton} onPress={handleCodeSubmit}>
+          <Text style={styles.submitButtonText}>Submit</Text>
+        </TouchableOpacity>
       </View>
-    );
-  }
+    </View>
+  );
+}
+
 
   // Personal Information Step
   if (verificationStep === 2) {
@@ -1765,6 +1764,21 @@ markSafeButtonText: {
   fontSize: 16,
   fontWeight: "600",
 },
+codeInputWrapper: {
+  flexDirection: 'row',
+  justifyContent: 'center',
+  marginVertical: 20,
+},
+continuousCodeInput: {
+  backgroundColor: 'lightgray',
+  borderRadius: 5,
+  padding: 15,
+  textAlign: 'center',
+  fontSize: 18,
+  width: '80%',
+  letterSpacing: 8, // Add spacing between characters for better aesthetics
+},
+
 });
 
 export default App;
