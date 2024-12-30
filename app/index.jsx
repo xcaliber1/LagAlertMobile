@@ -34,12 +34,17 @@ const App = () => {
   const [buttonText, setButtonText] = useState('Emergency');
   const [showCancelButton, setShowCancelButton] = useState(false);
   const [cancelTimer, setCancelTimer] = useState(4);
+  const [othersType, setOthersType] = useState(''); // Subtype of 'Others'
+  const [showOthersDropdown, setShowOthersDropdown] = useState(false); // Toggle for 'Others' dropdown
   const [emergencySent, setEmergencySent] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [verificationStep, setVerificationStep] = useState(0); // 0: Email input, 1: Code input, 2: Personal info, 3: Dashboard
   const [emailExists, setEmailExists] = useState(false); // Track if email exists
   const [userData, setUserData] = useState({ firstname: '', lastname: '', phoneNumber: '', profileImageUri: '' });
   const [phoneNumber, setPhoneNumber] = useState('');
+  const [idFileName, setIdFileName] = useState('');
+  const [idUri, setIdUri] = useState(''); // Store the URI of the uploaded ID
+
   const [isPhoneNumberValid, setIsPhoneNumberValid] = useState(true);
   const [verificationCode, setVerificationCode] = useState('');
   const [personalInfo, setPersonalInfo] = useState({
@@ -233,6 +238,18 @@ const fetchUserData = async (email) => {
   const handleOptionPress = (option) => {
     setSelectedEmergency(option);
     setShowOptions(false);
+    if (option === 'Others') {
+      setShowOthersDropdown(true); // Show dropdown when 'Others' is selected
+    } else {
+      setShowOthersDropdown(false);
+      setOthersType(''); // Reset othersType if not 'Others'
+    }
+  };
+
+  const handleOthersTypeSelect = (type) => {
+    setSelectedEmergency(type); // Replace "Others" with the selected subtype
+    setOthersType(type); // Store selected subtype
+    setShowOthersDropdown(false); // Close dropdown
   };
 
   const requestCameraPermissions = async () => {
@@ -290,10 +307,20 @@ const fetchUserData = async (email) => {
   };
 
   const initiateEmergencySending = () => {
+    if (!mediaUri) {
+      // If no picture or video is selected, show an alert
+      Alert.alert(
+        'Proof of Report Required',
+        'Please upload a picture or video as proof of the emergency before sending.',
+        [{ text: 'OK' }]
+      );      
+      return; // Stop further execution
+    }
+  
     setShowCancelButton(true);
     setCancelTimer(4);
     setEmergencySent(false);
-
+  
     Animated.loop(
       Animated.timing(cancelAnimation, {
         toValue: 1,
@@ -301,10 +328,9 @@ const fetchUserData = async (email) => {
         useNativeDriver: false,
       })
     ).start();
-
-
+  
     timerRef.current = setInterval(() => {
-      setCancelTimer(prev => {
+      setCancelTimer((prev) => {
         if (prev === 1) {
           clearInterval(timerRef.current);
           if (!emergencySent) {
@@ -316,6 +342,7 @@ const fetchUserData = async (email) => {
       });
     }, 1000);
   };
+  
 
   const sendEmergencyData = async () => {
     try {
@@ -356,9 +383,15 @@ const fetchUserData = async (email) => {
       const emergencyRef = ref(database, 'emergencies');
       const newEmergencyRef = push(emergencyRef);
   
+      // Determine the emergency type (include subcategory if it's 'Others')
+      const emergencyType =
+        selectedEmergency === 'Others' && othersType
+          ? `${selectedEmergency}: ${othersType}`
+          : selectedEmergency;
+  
       // Add personal information and profile image to the emergency data
       await set(newEmergencyRef, {
-        emergencyType: selectedEmergency,
+        emergencyType,
         description,
         mediaUri: mediaDownloadUrl,
         isVideo,
@@ -380,7 +413,7 @@ const fetchUserData = async (email) => {
   
       // Send emergency email to response team via Laravel backend
       await axios.post(`${BASE_URL}/report-emergency`, {
-        emergencyType: selectedEmergency,
+        emergencyType,
         description,
         location: {
           name: locationName, // Include location name
@@ -396,9 +429,9 @@ const fetchUserData = async (email) => {
         mediaUri: mediaDownloadUrl, // Include media URL in the request if needed
       });
   
-
       // Reset state after sending data
       setSelectedEmergency('');
+      setOthersType('');
       setDescription('');
       setMediaUri('');
       setIsVideo(false);
@@ -410,6 +443,7 @@ const fetchUserData = async (email) => {
       Alert.alert('Error', 'There was an error sending your emergency data.');
     }
   };
+  
   
   
   
@@ -564,15 +598,31 @@ const fetchUserData = async (email) => {
     }
   };
 
+  const handleIDUpload = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 1,
+    });
+  
+    if (!result.canceled) {
+      setIdUri(result.assets[0].uri);
+      const fileName = result.assets[0].uri.split('/').pop(); // Extract file name from URI
+      setIdFileName(fileName); // Save file name for display
+    }
+  };
+
   
   const handlePersonalInfoSubmit = async () => {
     const isPhoneValid = validatePhoneNumber(personalInfo.phoneNumber);
     const isEmailValid = validateEmail(personalInfo.email);
   
-    if (!personalInfo.firstname || !personalInfo.lastname || !isPhoneValid || !isEmailValid) {
+    if (!personalInfo.firstname || !personalInfo.lastname || !isPhoneValid || !isEmailValid || !idUri) {
       setIsFormValid(false);
       setIsPhoneNumberValid(isPhoneValid);
       setIsEmailValid(isEmailValid);
+      Alert.alert('Error', 'Please fill in all the fields correctly and upload your ID.');
       return;
     }
   
@@ -581,21 +631,34 @@ const fetchUserData = async (email) => {
     setIsEmailValid(true);
   
     try {
-      const personalInfoWithImage = {
+      // Upload ID to Firebase Storage
+      let idDownloadUrl = '';
+      if (idUri) {
+        const response = await fetch(idUri);
+        const blob = await response.blob();
+        const idRef = storageRef(storage, `uploadedIDs/${Date.now()}`);
+        await uploadBytes(idRef, blob);
+        idDownloadUrl = await getDownloadURL(idRef);
+      }
+  
+      // Add ID URL to personal information
+      const personalInfoWithID = {
         ...personalInfo,
         profileImageUri,
+        idUri: idDownloadUrl,
       };
   
-      const docRef = await addDoc(collection(firestore, 'personalInfo'), personalInfoWithImage);
+      const docRef = await addDoc(collection(firestore, 'personalInfo'), personalInfoWithID);
       console.log('Personal info added with ID:', docRef.id);
   
-      setUserData(personalInfoWithImage); // Update the userData state with the submitted info
+      setUserData(personalInfoWithID); // Update the userData state with the submitted info
       setAccountCreated(true);
     } catch (error) {
       console.error('Error adding personal information: ', error);
       Alert.alert('Error', 'There was an error saving your personal information.');
     }
   };
+  
 
   const handleProfileImageUpload = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -628,26 +691,32 @@ const fetchUserData = async (email) => {
     );
   }
 
-  const handleLogout = () => {
-    // Clear user data and reset all relevant states
-    setUserData({ firstname: '', lastname: '', phoneNumber: '', profileImageUri: '' });
-    setPersonalInfo({ firstname: '', lastname: '', email: '', phoneNumber: '' });
-    setVerificationCode('');
-    setIsFormValid(true);
-    setIsPhoneNumberValid(true);
-    setIsEmailValid(true);
-    setDataNotification(null); // Clear notification
-    setVerificationStep(0); // Reset verification step
-    setButtonText('Emergency'); // Reset button text
-    setSelectedEmergency('');
-    setDescription('');
-    setMediaUri('');
-    setIsVideo(false);
-    setEmergencySent(false);
-  
-    // Close settings modal if open
-    closeSettings();
-  };
+const handleLogout = () => {
+  // Clear user data and reset all relevant states
+  setUserData({ firstname: '', lastname: '', phoneNumber: '', profileImageUri: '' });
+  setPersonalInfo({ firstname: '', lastname: '', email: '', phoneNumber: '' });
+  setVerificationCode('');
+  setIsFormValid(true);
+  setIsPhoneNumberValid(true);
+  setIsEmailValid(true);
+  setIdUri(''); // Reset uploaded ID
+  setIdFileName(''); // Reset uploaded ID file name
+  setProfileImageUri(''); // Reset profile image URI
+  setVerificationStep(0); // Reset verification step
+  setAccountCreated(false); // Reset account creation status
+  setSelectedEmergency(''); // Reset emergency selection
+  setDescription(''); // Reset emergency description
+  setMediaUri(''); // Reset media URI
+  setIsVideo(false); // Reset video flag
+  setShowOptions(false); // Reset emergency options
+  setShowCancelButton(false); // Reset cancel button
+  setButtonText('Emergency'); // Reset button text
+  setEmergencySent(false); // Reset emergency sent status
+
+  // Close settings modal if open
+  closeSettings();
+};
+
   
 
   const animatedCancelStyle = {
@@ -777,6 +846,24 @@ if (verificationStep === 1) {
             value={personalInfo.phoneNumber}
             onChangeText={(text) => setPersonalInfo({ ...personalInfo, phoneNumber: text })}
           />
+                    <View style={styles.uploadIDContainer}>
+  <TouchableOpacity style={styles.uploadButton} onPress={handleIDUpload}>
+    <Text style={styles.uploadButtonText}>Upload ID</Text>
+  </TouchableOpacity>
+  {idUri ? (
+    <View style={styles.fileInfoContainer}>
+      <Text style={styles.fileName} numberOfLines={1} ellipsizeMode="middle">
+        {idFileName}
+      </Text>
+      <TouchableOpacity onPress={() => {
+        setIdUri('');
+        setIdFileName('');
+      }} style={styles.clearButton}>
+        <Ionicons name="close-circle-outline" size={24} color="red" />
+      </TouchableOpacity>
+    </View>
+  ) : null}
+</View>
           {!isFormValid && (
             <Text style={styles.errorText}>Please fill in all the fields correctly.</Text>
           )}
@@ -840,7 +927,10 @@ if (verificationStep === 1) {
             <View style={styles.profileContainer}>
               {userData.firstname ? (
                 <>
-                  <Image source={{ uri: userData.profileImageUri || '../assets/images/avatar.png' }} style={styles.profileImage} />
+                  <Image
+                    source={{ uri: userData.profileImageUri || '../assets/images/avatar.png' }}
+                    style={styles.profileImage}
+                  />
                   <Text style={styles.name}>{userData.firstname} {userData.lastname}</Text>
                   <Text style={styles.phone}>{userData.phoneNumber}</Text>
                 </>
@@ -895,6 +985,22 @@ if (verificationStep === 1) {
                     <Ionicons name="camera-outline" size={24} color="black" />
                   </TouchableOpacity>
                 </View>
+                {selectedEmergency === 'Others' && showOthersDropdown && (
+                  <View style={styles.dropdownContainer}>
+                    <TouchableOpacity
+                      style={styles.dropdownItem}
+                      onPress={() => handleOthersTypeSelect('Crime')}
+                    >
+                      <Text style={styles.dropdownText}>Crime</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.dropdownItem}
+                      onPress={() => handleOthersTypeSelect('Accidents')}
+                    >
+                      <Text style={styles.dropdownText}>Accidents</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
                 <View style={styles.textInputContainer}>
                   <TextInput
                     style={styles.textInput}
@@ -927,6 +1033,12 @@ if (verificationStep === 1) {
                   ) : null}
                 </View>
                 <Text style={styles.infoText}>This message will be sent to your c/mdrrmo response team</Text>
+                {!mediaUri && (
+  <Text style={{ color: 'red', marginBottom: 10 }}>
+    Please upload a picture or video before sending.
+  </Text>
+)}
+
                 <TouchableOpacity style={styles.sendButton} onPress={initiateEmergencySending}>
                   <Text style={styles.sendButtonText}>Send</Text>
                 </TouchableOpacity>
@@ -1062,7 +1174,10 @@ if (verificationStep === 1) {
         <View style={styles.profileContainer}>
           {userData.firstname ? (
             <>
-              <Image source={{ uri: userData.profileImageUri || '../assets/images/avatar.png' }} style={styles.profileImage} />
+              <Image
+                source={{ uri: userData.profileImageUri || '../assets/images/avatar.png' }}
+                style={styles.profileImage}
+              />
               <Text style={styles.name}>{userData.firstname} {userData.lastname}</Text>
               <Text style={styles.phone}>{userData.phoneNumber}</Text>
             </>
@@ -1117,6 +1232,22 @@ if (verificationStep === 1) {
                 <Ionicons name="camera-outline" size={24} color="black" />
               </TouchableOpacity>
             </View>
+            {selectedEmergency === 'Others' && showOthersDropdown && (
+              <View style={styles.dropdownContainer}>
+                <TouchableOpacity
+                  style={styles.dropdownItem}
+                  onPress={() => handleOthersTypeSelect('Crime')}
+                >
+                  <Text style={styles.dropdownText}>Crime</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.dropdownItem}
+                  onPress={() => handleOthersTypeSelect('Accidents')}
+                >
+                  <Text style={styles.dropdownText}>Accidents</Text>
+                </TouchableOpacity>
+              </View>
+            )}
             <View style={styles.textInputContainer}>
               <TextInput
                 style={styles.textInput}
@@ -1778,6 +1909,78 @@ continuousCodeInput: {
   width: '80%',
   letterSpacing: 8, // Add spacing between characters for better aesthetics
 },
+dropdownContainer: {
+  flexDirection: 'row', // Arrange items in a row
+  justifyContent: 'space-around', // Space items evenly
+  alignItems: 'center', // Center items vertically
+  marginVertical: 10, // Add some space above and below
+},
+dropdownItem: {
+  backgroundColor: '#f0f0f0', // Light background
+  padding: 15, // Add padding
+  borderRadius: 10, // Rounded corners
+  width: '40%', // Ensure even spacing
+  alignItems: 'center', // Center text inside
+},
+leftDropdownItem: {
+  marginRight: 10, // Add spacing to the right for Crime
+},
+rightDropdownItem: {
+  marginLeft: 10, // Add spacing to the left for Accidents
+},
+dropdownText: {
+  color: 'black',
+  fontSize: 16,
+  fontWeight: 'bold',
+},
+
+uploadIDContainer: {
+  flexDirection: 'row', // Place items in a row
+  alignItems: 'center', // Align items vertically
+  justifyContent: 'space-between', // Space between Upload ID button and file info
+  marginVertical: 10, // Add spacing above and below the row
+  width: '100%', // Ensure it spans the full width
+},
+
+uploadButton: {
+  backgroundColor: 'blue',
+  borderRadius: 10,
+  paddingVertical: 10,
+  paddingHorizontal: 20,
+  marginRight: 10, // Add space between the button and file info
+},
+
+uploadButtonText: {
+  color: 'white',
+  fontSize: 16,
+  fontWeight: 'bold',
+  textAlign: 'center',
+},
+
+fileInfoContainer: {
+  flexDirection: 'row', // File name and X button in the same row
+  alignItems: 'center', // Align items vertically
+  flex: 1, // Allow this container to take up remaining space
+},
+
+fileName: {
+  flex: 1, // Allow the file name to take up available space
+  color: 'black',
+  fontSize: 16,
+  fontWeight: 'bold',
+  marginRight: 10, // Add space between the file name and X button
+},
+
+clearButton: {
+  padding: 5, // Add some padding around the clear button
+},
+
+clearButton: {
+  marginLeft: 10, // Space between the file name and the button
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+
 
 });
 
